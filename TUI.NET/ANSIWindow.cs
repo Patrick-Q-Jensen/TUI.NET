@@ -6,6 +6,8 @@
         //private readonly string _title;
         private volatile bool _running;
         public string Title { get; set; } = "";
+        private CanvasView? currentView = null;
+
 
         public void Show(Grid rootGrid)
         {
@@ -27,6 +29,7 @@
 
             // Ensure initial clean screen
             SafeWriteAnsiClear();
+            RenderFrame(rootGrid);
 
             using var watcher = new ConsoleResizeWatcher();
             bool needsRender = true;
@@ -40,8 +43,13 @@
 
             try
             {
-                while (_running)
-                {
+                  while (_running)
+                 {
+                    // if (needsRender)
+                    //{
+                    //    RenderFrame(rootGrid);
+                    //    needsRender = false;
+                    //}
                     if (!stabilized && needsRender)
                     {
                         pending?.Cancel();
@@ -61,8 +69,6 @@
 
                     if (stabilized && needsRender)
                     {
-                        // clear (ANSI) and re-render final frame from main thread
-                        SafeWriteAnsiClear();
                         RenderFrame(rootGrid);
                         needsRender = false;
                         stabilized = false;
@@ -82,7 +88,7 @@
                     }
                     else
                     {
-                        Thread.Sleep(20);
+                        Thread.Sleep(80);
                     }
                 }
             }
@@ -103,7 +109,9 @@
 
         private void RenderFrame(Grid rootGrid) {
             var pre = PreRendering.PreRender(rootGrid);
+            SafeWriteAnsiClear();
             Renderering.Render(pre);
+            currentView = pre;
         }
 
         private static void SafeWriteAnsiClear()

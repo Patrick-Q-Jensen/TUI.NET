@@ -1,87 +1,13 @@
 ﻿namespace TUI.NET;
 
-
-internal readonly struct CanvasView
-{
-    private readonly char[,] _buffer;
-    public int X { get; }
-    public int Y { get; }
-    public int Width { get; }
-    public int Height { get; }
-
-    public CanvasView(char[,] buffer, int x, int y, int width, int height)
-    {
-        _buffer = buffer ?? throw new ArgumentNullException(nameof(buffer));
-        X = Math.Max(0, x);
-        Y = Math.Max(0, y);
-        Width = Math.Max(0, Math.Min(width, buffer.GetLength(0) - X));
-        Height = Math.Max(0, Math.Min(height, buffer.GetLength(1) - Y));
-    }
-
-    // Create an inner view by shrinking each side by margin
-    public CanvasView CreateInner(int margin)
-    {
-        if (margin <= 0) return this;
-        int newX = X + margin;
-        int newY = Y + margin;
-        int newWidth = Width - margin * 2;
-        int newHeight = Height - margin * 2;
-        if (newWidth <= 0 || newHeight <= 0)
-            return new CanvasView(_buffer, 0, 0, 0, 0); // empty view
-        return new CanvasView(_buffer, newX, newY, newWidth, newHeight);
-    }
-
-
-    // Create an inner view by shrinking each side by margin
-    public CanvasView CreateInner(GridRow row)
-    {
-        //if (margin <= 0) return this;
-        //int newX = X + margin;
-        //uint newY = row.UpperY;
-        //int newWidth = Width - margin * 2;
-
-        int newHeight = row.Height;
-        if (newHeight > Height)
-            newHeight = Height;
-        if (newHeight <= 0)
-            return new CanvasView(_buffer, 0, 0, 0, 0); // empty view
-        return new CanvasView(_buffer, X, Y, Width, newHeight);
-    }
-
-    public CanvasView RemoveRow(GridRow row)
-    {
-        int newHeight = Height - row.Height;
-        if (newHeight <= 0)
-            return new CanvasView(_buffer, 0, 0, 0, 0); // empty view
-        return new CanvasView(_buffer, X, Y + row.Height, Width, newHeight);
-    }
-
-    // Indexer: local coordinates
-    public char this[int lx, int ly]
-    {
-        get
-        {
-            if (lx < 0 || lx >= Width || ly < 0 || ly >= Height) return '\0';
-            return _buffer[lx + X, ly + Y];
-        }
-        set
-        {
-            if (lx < 0 || lx >= Width || ly < 0 || ly >= Height) return;
-            _buffer[lx + X, ly + Y] = value;
-        }
-    }
-}
-
 internal static class PreRendering
 {
-
-    public static char[,] PreRender(Grid rootGrid)
+    public static CanvasView PreRender(Grid rootGrid)
     {
         Console.Clear();
         int width = Console.WindowWidth;
         int height = Console.WindowHeight;
         char[,] buffer = new char[width, height];
-
 
         for (int x = 0; x < width; x++)
             for (int y = 0; y < height; y++)
@@ -89,92 +15,125 @@ internal static class PreRendering
 
         var rootView = new CanvasView(buffer, 0, 0, width, height);
 
-        if (rootGrid.BorderThickness > 0) {
-            //Draw root borders
-            RenderElementBorders(rootGrid, rootView);
-            rootView = rootView.CreateInner((int)rootGrid.BorderThickness);
-        }
+        RenderElement(rootGrid, rootView);
 
-        SetRowHeights(rootGrid, rootView);
-        ////Draw vertical borders
-        //for (int y = 0; y < height; y++) {
-        //    rootView[0, y] = rootGrid.VerticalBorderChar;
-        //    rootView[width - 1, y] = rootGrid.VerticalBorderChar;
-        //}
-
-        ////Draw horizontal borders
-        //for (int x = 0; x < width; x++) {
-        //    rootView[x, 0] = rootGrid.HorizontalBorderChar;
-        //    rootView[x, height - 1] = rootGrid.HorizontalBorderChar;
-        //}
-
-        //RenderGrid(rootGrid, rootView);
-
-        RenderElementRecursive(rootGrid.Children, rootView, rootGrid);
-
-        //foreach (IUIElement uiElement in rootGrid.Children)
-        //{
-        //    RenderElementRecursive(uiElement, rootView, rootGrid);
-        //}
-
-        return buffer;
+        return rootView;
     }
 
-    private static void SetRowHeights(Grid grid, CanvasView view)
+    private static Cell[,] GenerateCells(List<GridRow> rows, List<GridColumn> columns, CanvasView view)
     {
-        int totalFixedRowHeights = 0;
-        foreach (GridRow row in grid.Rows.Where(x => x.SizeMode == SizeMode.Fixed))
+        SetRowHeights(rows, view.Height);
+        SetColumnWidths(columns, view.Width);
+
+        Cell[,] cells = new Cell[rows.Count, columns.Count];
+
+        int yOffset = 0;
+        for (int rowIndex = 0; rowIndex < rows.Count; rowIndex++)
         {
-            totalFixedRowHeights += row.Height;
+            int rowHeight = rows[rowIndex].RenderingHeight;
+            int xOffset = 0;
+            for (int columnIndex = 0; columnIndex < columns.Count; columnIndex++)
+            {
+                int colWidth = columns[columnIndex].RenderingWidth;
+
+                // Create a sub-view for this cell (local coordinates within rootView)
+                var cellView = view.CreateSubView(xOffset, yOffset, colWidth, rowHeight);
+                cells[rowIndex, columnIndex] = new Cell(cellView);
+
+                xOffset += colWidth;
+            }
+            yOffset += rowHeight;
         }
 
-        int autoRowCount = grid.Rows.Count(x => x.SizeMode == SizeMode.Auto);
-        int remainingHeight = view.Height - totalFixedRowHeights;
+        return cells;
+    }
+
+    private static void SetRowHeights(List<GridRow> rows, int availableHeight)
+    {
+        foreach (GridRow row in rows.Where(r=>r.Height >= 0)) {
+            row.RenderingHeight = row.Height;
+        }
+
+        int totalFixedRowHeights = rows.Where(r => r.Height >= 0).Sum(r => r.Height);
+
+        int autoRowCount = rows.Count(r => r.Height < 0);
+        int remainingHeight = Math.Max(0, availableHeight - totalFixedRowHeights);
         int autoRowHeight = autoRowCount > 0 ? remainingHeight / autoRowCount : 0;
-        //uint upperY = (uint)view.Y;
-        foreach (GridRow row in grid.Rows) {
-            if (row.SizeMode == SizeMode.Auto) {
-                row.Height = autoRowHeight;
-            }
-            //row.UpperY = upperY;
-            //row.LowerY = upperY + (uint)row.Height - 1;
-            //upperY += (uint)row.Height;
+
+        foreach (GridRow row in rows.Where(r => r.Height < 0))
+        {
+            row.RenderingHeight = autoRowHeight;
         }
     }
 
-    private static void RenderElementRecursive(List<IUIElement> elements, CanvasView parentView, Grid parentGrid)
+    private static void SetColumnWidths(List<GridColumn> columns, int availableWidth)
+    {
+        foreach (GridColumn column in columns.Where(c => c.Width >= 0)) {
+            column.RenderingWidth = column.Width;
+        }
+
+        int totalFixedColumnWidths = columns.Where(c => c.Width >= 0).Sum(c => c.Width);
+
+        int autoColumnCount = columns.Count(c => c.Width < 0);
+        int remainingWidth = Math.Max(0, availableWidth - totalFixedColumnWidths);
+        int autoColumnWidth = autoColumnCount > 0 ? remainingWidth / autoColumnCount : 0;
+
+        foreach (GridColumn column in columns.Where(r=>r.Width < 0))
+        {
+            column.RenderingWidth = autoColumnWidth;
+        }
+    }
+
+    private static void RenderElementRecursive(List<IUIElement> elements, Cell[,] cells)
     {
         foreach (IUIElement element in elements)
         {
-            CanvasView inner = parentView.CreateInner((int)element.Margin);
-
-            if (element.RowIndex != null)
-            {
-                if (parentGrid.Rows.Count >= element.RowIndex + 1)
-                {
-                    GridRow row = parentGrid.Rows[element.RowIndex.Value];
-                    inner = inner.CreateInner(row);
-                    parentView = parentView.RemoveRow(row);
-                }
-            }
-
-            //! If the size of the entire canvas is smaller than or equal to the margin we won't bother rendering the element
-            if (element.Margin * 2 >= inner.Height || element.Margin * 2 >= inner.Width)
-            {
-                return;
-            }
-
-            if (inner.Width <= 0 || inner.Height <= 0)
-                return;
-            if (element.BorderThickness > 0)
-            {
-                RenderElementBorders(element, inner);
-                inner = inner.CreateInner((int)element.BorderThickness);
-                if (inner.Width <= 0 || inner.Height <= 0)
-                    return;
-            }
-            RenderElementSpecific(element, inner, parentGrid);
+            Cell targetCell = cells[element.RowIndex, element.ColumnIndex];
+            targetCell.View = MergeCellViewsAcrossSpan(cells, targetCell.View, element);
+            RenderElement(element, targetCell.View);
         }
+    }
+
+    private static CanvasView MergeCellViewsAcrossSpan(Cell[,] cells, CanvasView view, IUIElement element)
+    {
+        int totalRows = cells.GetLength(0);
+        int totalCols = cells.GetLength(1);
+
+        int startRow = element.RowIndex;
+        int startCol = element.ColumnIndex;
+        int rowSpan = Math.Max(1, (int)element.RowSpan);
+        int colSpan = Math.Max(1, (int)element.ColumnSpan);
+
+        int endRow = Math.Min(startRow + rowSpan, totalRows);
+        int endCol = Math.Min(startCol + colSpan, totalCols);
+
+        for (int r = startRow; r < endRow; r++)
+        {
+            for (int c = startCol; c < endCol; c++)
+            {
+                // skip the starting cell (already in view)
+                if (r == startRow && c == startCol) continue;
+                view = view.MergeWith(cells[r, c].View);
+            }
+        }
+
+        return view;
+    }
+
+    private static void RenderElement(IUIElement element, CanvasView view)
+    {
+
+        view = view.CreateInner(element.Margins);
+
+        if (element.BorderThickness > 0)
+        {
+            RenderElementBorders(element, view);
+            view = view.CreateInner((int)element.BorderThickness);
+            if (view.Width <= 0 || view.Height <= 0)
+                return;
+        }
+
+        RenderElementSpecific(element, view);
     }
 
     private static void RenderElementBorders(IUIElement element, CanvasView view)
@@ -216,20 +175,43 @@ internal static class PreRendering
         }
     }
 
-
-    private static void RenderElementSpecific(IUIElement element, CanvasView view, Grid parentGrid)
+    private static void RenderElementSpecific(IUIElement element, CanvasView view)
     {
-        if (element is Grid grid)
+        switch (element)
         {
-            RenderGrid(grid, view);
-            // Render grid-specific content
+            case Grid grid:
+                RenderGrid(grid, view);
+                break;
+            case TextBlock textBlock:
+                RenderTextBlock(textBlock, view);
+                break;
         }
 
     }
 
+    private static void RenderTextBlock(TextBlock textBlock, CanvasView view)
+    {
+        string cleanText = textBlock.Text.Replace('\r', '\0');
+
+        string[] lines = cleanText.Split('\n');
+        for (int i = 0; i < lines.Length && i < view.Height; i++)
+        {
+            string line = lines[i];
+            for (int j = 0; j < line.Length && j < view.Width; j++)
+            {
+                view[j, i] = line[j];
+            }
+        }
+    }
+
     private static void RenderGrid(Grid grid, CanvasView view)
     {
-        //Draw Title
+        if (grid.Rows.Count == 0) grid.Rows.Add(new GridRow());
+        if (grid.Columns.Count == 0) grid.Columns.Add(new GridColumn());
+
+        grid.Cells = GenerateCells(grid.Rows, grid.Columns, view);
+
+        RenderElementRecursive(grid.Elements, grid.Cells);
 
     }
 

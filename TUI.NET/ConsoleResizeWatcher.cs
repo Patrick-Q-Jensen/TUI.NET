@@ -1,8 +1,4 @@
-﻿using System;
-using System.Threading;
-using System.Threading.Tasks;
-
-namespace TUI.NET
+﻿namespace TUI.NET
 {
     // Polling resize watcher - cross-platform and simple.
     // Now debounces resize notifications: Resized is raised only after
